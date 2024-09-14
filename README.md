@@ -24,8 +24,7 @@ streamer = TextStreamer(tokenizer, skip_special_tokens=True)
 prompt = 'Making pesto from scratch can be done with these ingredients in 4 simple steps:\nStep 1'
 inputs = tokenizer(prompt, return_tensors='pt')
 
-stream = torch.cuda.Stream()
-offloaded = offload(model, stream)
+offloaded = offload(model)
 
 offloaded.generate(inputs.input_ids.to('cuda'), max_new_tokens=50, do_sample=True, top_k=50, top_p=0.9, streamer=streamer)
 

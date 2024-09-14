@@ -11,8 +11,7 @@ model2 = OPTForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).t
 x = torch.load('opt-30b-c4-inputs.pt').to('cuda')
 x2 = x.clone()
 
-stream = torch.cuda.Stream()
-offloaded = offload(model, stream)
+offloaded = offload(model)
 
 with torch.no_grad():
     output = offloaded(x)
@@ -24,7 +23,7 @@ if not torch.allclose(output.logits, output2.logits):
 
 model_name = 'facebook/opt-30b'
 model = OPTForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16)
-offloaded = offload(model, stream)
+offloaded = offload(model)
 
 set_seed(42)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -33,5 +32,6 @@ streamer = TextStreamer(tokenizer, skip_special_tokens=True)
 prompt = 'Making pesto from scratch can be done with these ingredients in 4 simple steps:\nStep 1'
 inputs = tokenizer(prompt, return_tensors='pt')
 
-print('Offloaded generation:')
 offloaded.generate(inputs.input_ids.to('cuda'), max_new_tokens=5, do_sample=True, top_k=50, top_p=0.9, streamer=streamer)
+
+print(f'Max GPU mem usage: {torch.cuda.max_memory_allocated("cuda") / 1024 ** 3} GB\n===')

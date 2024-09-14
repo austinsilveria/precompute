@@ -3,7 +3,9 @@ import types
 
 import torch
 
-def offload(model, stream, next=None, state_dict=None, cpu_weights=None, name_prefix='', device='cuda'):
+def offload(model, stream=None, next=None, state_dict=None, cpu_weights=None, name_prefix='', device='cuda'):
+    if stream is None:
+        stream = torch.cuda.Stream()
     if state_dict is None:
         state_dict = model.state_dict()
     if cpu_weights is None:
@@ -96,6 +98,6 @@ def offload(model, stream, next=None, state_dict=None, cpu_weights=None, name_pr
             submodule_name_prefix = name_prefix + submodule_names[i] + '.'
             if i + 1 < len(submodules):
                 next = submodules[i + 1]
-            offload(submodules[i], stream, next=next, state_dict=state_dict, cpu_weights=cpu_weights, name_prefix=submodule_name_prefix, device=device)
+            offload(submodules[i], stream=stream, next=next, state_dict=state_dict, cpu_weights=cpu_weights, name_prefix=submodule_name_prefix, device=device)
     
     return model
