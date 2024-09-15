@@ -34,6 +34,7 @@ def offload(model, stream=None, next=None, state_dict=None, cpu_weights=None, na
 
             # Move weights out of model
             cpu_weights[name_prefix + name + '.weight'] = weights_from.clone().pin_memory()
+            # Dummy value since can't be None
             leaf.weight.data = torch.tensor(0.0, device='cpu', dtype=leaf.weight.dtype)
 
             if hasattr(leaf, 'bias') and leaf.bias is not None:
