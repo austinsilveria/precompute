@@ -1,0 +1,51 @@
+body {
+    background: linear-gradient(135deg, #ece9e6 0%, #ffffff 100%);
+    font-family: 'Arial', sans-serif;
+    color: #333;
+    margin: 0;
+    padding: 0;
+}
+
+.graph{
+    border-radius: 15px;
+    overflow: hidden;
+    height: 500px;
+}
+
+.graph-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(650px, 1fr));
+    gap: 20px;
+    padding: 20px;
+    box-sizing: border-box;
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+.graph-container {
+    width: min(800px, 100%);
+    background: #ffffff;
+    border-radius: 15px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    transition: transform 0.2s;
+}
+
+.graph-container:hover {
+    transform: translateY(-5px);
+}
+
+.h1 {
+    text-align: center;
+    margin-bottom: 40px;
+    font-size: 2em;
+    color: #4a4a4a;
+}
+
+.markdown{
+    font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif;
+    font-size: medium;
+    margin: 0;
+    padding: 0;
+    line-height: 1.4;
+}

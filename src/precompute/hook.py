@@ -72,7 +72,7 @@ class HookVariableNames:
     ]
 
 class PrecomputeContext:
-    def __init__(self, config) -> None:
+    def __init__(self, config, hooks=[]) -> None:
         self.config = config
 
         # Immutably logged context
@@ -84,17 +84,17 @@ class PrecomputeContext:
         self.hooks = { vn: [] for vn in HookVariableNames.ALL_VARIABLE_NAMES }
         # Hook variable values by hook variable name
         # self.hook_variables = {}
+        for hook in hooks:
+            self.hooks[hook.hook_variable_name].append(hook.hook_fn)
 
-    def hook_tensor(self, variable_name: str, value: torch.Tensor) -> None:
-        # if 'layer' in self.unlogged_context:
-        #     name = f'{name}-layer-{self.unlogged_context["layer"]}'
-
+    def hook_tensor(self, variable_name: str, value: torch.Tensor, shape_in=lambda x: x, shape_out=lambda x: x) -> None:
         # Call matched hooks
-        outputs = [hook_fn(value, self) for hook_fn in self.hooks[variable_name]]
+        if len(self.hooks[variable_name]) > 0:
+            rearranged = shape_in(value)
+            outputs = [hook_fn(rearranged, self) for hook_fn in self.hooks[variable_name]]
+            outputs = [o for o in outputs if o is not None]
 
-        if len(outputs) > 0:
-            # Mutate the tensor. Return last output.
-            return outputs[-1]
+            return shape_out(outputs[-1]) if len(outputs) > 0 else value
 
         # Pass through
         return value

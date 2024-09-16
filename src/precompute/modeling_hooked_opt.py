@@ -46,6 +46,7 @@ from transformers.utils import (
 from transformers import OPTConfig
 
 from precompute import PrecomputeContext, HookVariableNames
+from einops import rearrange
 
 
 if is_flash_attn_2_available():
@@ -133,7 +134,7 @@ class OPTAttention(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
-        precompute_context: Optional[PrecomputeContext] = None,
+        pctx: Optional[PrecomputeContext] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -175,14 +176,15 @@ class OPTAttention(nn.Module):
             # if encoder bi-directional self-attention `past_key_value` is always `None`
             past_key_value = (key_states, value_states)
 
+        query_states = self._shape(query_states, tgt_len, bsz)
+        query_states = pctx.hook_tensor(HookVariableNames.QUERY_STATES, query_states)
+        key_states = pctx.hook_tensor(HookVariableNames.KEY_STATES, key_states)
+        value_states = pctx.hook_tensor(HookVariableNames.VALUE_STATES, value_states)
+
         proj_shape = (bsz * self.num_heads, -1, self.head_dim)
-        query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
+        query_states = query_states.view(*proj_shape)
         key_states = key_states.view(*proj_shape)
         value_states = value_states.view(*proj_shape)
-
-        query_states = precompute_context.hook_tensor(HookVariableNames.QUERY_STATES, query_states)
-        key_states = precompute_context.hook_tensor(HookVariableNames.KEY_STATES, key_states)
-        value_states = precompute_context.hook_tensor(HookVariableNames.VALUE_STATES, value_states)
 
         src_len = key_states.size(1)
         attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
@@ -210,7 +212,12 @@ class OPTAttention(nn.Module):
         else:
             attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
-        attn_weights = precompute_context.hook_tensor(HookVariableNames.ATTN_PROBS, attn_weights)
+        attn_weights = pctx.hook_tensor(
+            HookVariableNames.ATTN_PROBS,
+            attn_weights,
+            shape_in=lambda x: rearrange(x, '(b h) i j -> b h i j', b=bsz, h=self.num_heads),
+            shape_out=lambda x: rearrange(x, 'b h i j -> (b h) i j'),
+        )
 
         if layer_head_mask is not None:
             if layer_head_mask.size() != (self.num_heads,):
@@ -234,7 +241,12 @@ class OPTAttention(nn.Module):
         attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
 
         attn_output = torch.bmm(attn_probs, value_states)
-        attn_output = precompute_context.hook_tensor(HookVariableNames.ATTN_WEIGHTED_VALUES, attn_output)
+        attn_output = pctx.hook_tensor(
+            HookVariableNames.ATTN_WEIGHTED_VALUES,
+            attn_output,
+            shape_in=lambda x: rearrange(x, '(b h) i j -> b h i j', b=bsz, h=self.num_heads),
+            shape_out=lambda x: rearrange(x, 'b h i j -> (b h) i j'),
+        )
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
             raise ValueError(
@@ -250,7 +262,7 @@ class OPTAttention(nn.Module):
         attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
 
         attn_output = self.out_proj(attn_output)
-        attn_output = precompute_context.hook_tensor(HookVariableNames.ATTN_RESIDUAL, attn_output)
+        attn_output = pctx.hook_tensor(HookVariableNames.ATTN_RESIDUAL, attn_output)
 
         return attn_output, attn_weights_reshaped, past_key_value
 
@@ -406,7 +418,7 @@ class OPTDecoderLayer(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-        precompute_context: Optional[PrecomputeContext] = None,
+        pctx: Optional[PrecomputeContext] = None,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
@@ -430,7 +442,7 @@ class OPTDecoderLayer(nn.Module):
         if self.do_layer_norm_before:
             hidden_states = self.self_attn_layer_norm(hidden_states)
 
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.PRE_ATTN, hidden_states)
+        hidden_states = pctx.hook_tensor(HookVariableNames.PRE_ATTN, hidden_states)
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
@@ -438,11 +450,11 @@ class OPTDecoderLayer(nn.Module):
             attention_mask=attention_mask,
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
-            precompute_context=precompute_context,
+            pctx=pctx,
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.POST_ATTN, hidden_states)
+        hidden_states = pctx.hook_tensor(HookVariableNames.POST_ATTN, hidden_states)
 
         # 350m applies layer norm AFTER attention
         if not self.do_layer_norm_before:
@@ -457,18 +469,20 @@ class OPTDecoderLayer(nn.Module):
         if self.do_layer_norm_before:
             hidden_states = self.final_layer_norm(hidden_states)
 
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.PRE_MLP, hidden_states)
+        shape_in = lambda x: rearrange(x, '(b n) d -> b n d', b=hidden_states_shape[0], n=hidden_states_shape[1])
+        shape_out = lambda x: rearrange(x, 'b n d -> (b n) d')
+        hidden_states = pctx.hook_tensor(HookVariableNames.PRE_MLP, hidden_states, shape_in=shape_in, shape_out=shape_out)
         hidden_states = self.fc1(hidden_states)
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.POST_FC1, hidden_states)
+        hidden_states = pctx.hook_tensor(HookVariableNames.POST_FC1, hidden_states, shape_in=shape_in, shape_out=shape_out)
         hidden_states = self.activation_fn(hidden_states)
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.POST_ACT, hidden_states)
+        hidden_states = pctx.hook_tensor(HookVariableNames.POST_ACT, hidden_states, shape_in=shape_in, shape_out=shape_out)
 
         hidden_states = self.fc2(hidden_states)
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.MLP_RESIDUAL, hidden_states)
+        hidden_states = pctx.hook_tensor(HookVariableNames.MLP_RESIDUAL, hidden_states, shape_in=shape_in, shape_out=shape_out)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         hidden_states = (residual + hidden_states).view(hidden_states_shape)
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.POST_MLP, hidden_states)
+        hidden_states = pctx.hook_tensor(HookVariableNames.POST_MLP, hidden_states)
 
         # 350m applies layer norm AFTER attention
         if not self.do_layer_norm_before:
@@ -650,7 +664,7 @@ class OPTDecoder(OPTPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        precompute_context: Optional[PrecomputeContext] = None,
+        pctx: Optional[PrecomputeContext] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         r"""
         Args:
@@ -720,7 +734,7 @@ class OPTDecoder(OPTPreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-        inputs_embeds = precompute_context.hook_tensor(HookVariableNames.POST_TOK_EMBEDDINGS, inputs_embeds)
+        inputs_embeds = pctx.hook_tensor(HookVariableNames.POST_TOK_EMBEDDINGS, inputs_embeds)
 
         batch_size, seq_length = input_shape
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
@@ -755,7 +769,7 @@ class OPTDecoder(OPTPreTrainedModel):
             inputs_embeds = self.project_in(inputs_embeds)
 
         hidden_states = inputs_embeds + pos_embeds
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.POST_POS_EMBEDDINGS, hidden_states)
+        hidden_states = pctx.hook_tensor(HookVariableNames.POST_POS_EMBEDDINGS, hidden_states)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -779,7 +793,7 @@ class OPTDecoder(OPTPreTrainedModel):
                     )
 
         for idx, decoder_layer in enumerate(self.layers):
-            precompute_context.context['layer'] = idx
+            pctx.context['layer'] = idx
 
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             if output_hidden_states:
@@ -801,7 +815,7 @@ class OPTDecoder(OPTPreTrainedModel):
                     None,
                     output_attentions,
                     use_cache,
-                    precompute_context,
+                    pctx,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -811,7 +825,7 @@ class OPTDecoder(OPTPreTrainedModel):
                     past_key_value=past_key_value,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
-                    precompute_context=precompute_context,
+                    pctx=pctx,
                 )
 
             hidden_states = layer_outputs[0]
@@ -821,11 +835,11 @@ class OPTDecoder(OPTPreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
-        del precompute_context.context['layer']
+        del pctx.context['layer']
 
         if self.final_layer_norm is not None:
             hidden_states = self.final_layer_norm(hidden_states)
-        hidden_states = precompute_context.hook_tensor(HookVariableNames.POST_FINAL_LAYER_NORM, hidden_states)
+        hidden_states = pctx.hook_tensor(HookVariableNames.POST_FINAL_LAYER_NORM, hidden_states)
 
         if self.project_out is not None:
             hidden_states = self.project_out(hidden_states)
@@ -920,6 +934,7 @@ class HookedOPTForCausalLM(OPTPreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
+        config.dropout = 0.0
         self.model = OPTModel(config)
 
         # the lm_head weight is automatically tied to the embed tokens weight
@@ -959,7 +974,7 @@ class HookedOPTForCausalLM(OPTPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        precompute_context: Optional[PrecomputeContext] = None,
+        pctx: Optional[PrecomputeContext] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -1052,11 +1067,11 @@ class HookedOPTForCausalLM(OPTPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            precompute_context=precompute_context,
+            pctx=pctx,
         )
 
         logits = self.lm_head(outputs[0]).contiguous()
-        logits = precompute_context.hook_tensor(HookVariableNames.LOGITS, logits)
+        logits = pctx.hook_tensor(HookVariableNames.LOGITS, logits)
 
         loss = None
         if labels is not None:

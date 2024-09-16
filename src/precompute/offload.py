@@ -45,7 +45,7 @@ def offload(model, stream=None, next=None, state_dict=None, cpu_weights=None, na
     pct = int(100 * len(list(cpu_weights.keys())) // len(list(state_dict.keys())))
     num_hyphens = int(50 * pct // 100)
     num_spaces = 50 - num_hyphens
-    print(f'Offloading Progress: [{pct}%] |{chr(9608) * num_hyphens}{" " * num_spaces}|', end='\r')
+    print(f'Offloading Initialization: [{pct}%] |{chr(9608) * num_hyphens}{" " * num_spaces}|', end='\r')
     
     # Shallow copy next layer
     next_copy = copy.copy(next)
