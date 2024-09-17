@@ -29,7 +29,7 @@ This means that in reverse diffusion, low frequencies are added to the image fir
 
 If this is the case for images, how can we apply this analysis to language?
 
-In the following graphs, we're looking at the power spectrum of each hidden state dimension across sequence length, averaged across all hidden state dimensions and a batch of 8 sequences (768 hidden state dimensions for OPT-125m).
+In the following log-log graphs, we're looking at the power spectrum of each hidden state dimension across sequence length, averaged across all hidden state dimensions and a batch of 8 sequences (768 hidden state dimensions for OPT-125m).
 
 ```python
 # Tok Embeddings, Tok + Pos Embeddings, 12 layers
