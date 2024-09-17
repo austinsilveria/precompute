@@ -16,7 +16,7 @@ model_name = 'facebook/opt-125m'
 model = HookedOPTForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).to('cuda')
 
 raw_datasets = load_dataset('c4', 'en', streaming=True)
-context_length = 512
+context_length = 2048
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 def tokenize(element):
@@ -51,6 +51,12 @@ def log_post_pos_embeddings(x, ctx):
     ctx.context['post-pos-embeddings'] = x.cpu()
     return x
 
+def log_attn_residual(x, ctx):
+    if 'attn-residual' not in ctx.context:
+        ctx.context['attn-residual'] = torch.zeros(ctx.config.num_hidden_layers, *x.shape, device='cpu')
+    ctx.context['attn-residual'][ctx.context['layer']] = x.cpu()
+    return x
+
 # [b, n, d]
 def log_mlp_residual(x, ctx):
     if 'mlp-residual' not in ctx.context:
@@ -58,8 +64,15 @@ def log_mlp_residual(x, ctx):
     ctx.context['mlp-residual'][ctx.context['layer']] = x.cpu()
     return x
 
-# [b, n, d]
 def log_post_mlp(x, ctx):
+    """
+    Log post-MLP hidden states for each layer.
+
+    x     : [b, n, d]
+    ctx   : PrecomputeContext
+
+    return: [b, n, d]
+    """
     if 'post-mlp' not in ctx.context:
         ctx.context['post-mlp'] = torch.zeros(ctx.config.num_hidden_layers, *x.shape, device='cpu')
     ctx.context['post-mlp'][ctx.context['layer']] = x.cpu()
@@ -73,6 +86,7 @@ def log_post_final_layer_norm(x, ctx):
 hooks = [
     Hook(HookVariableNames.POST_TOK_EMBEDDINGS, log_post_tok_embeddings),
     Hook(HookVariableNames.POST_POS_EMBEDDINGS, log_post_pos_embeddings),
+    Hook(HookVariableNames.ATTN_RESIDUAL, log_attn_residual),
     Hook(HookVariableNames.MLP_RESIDUAL, log_mlp_residual),
     Hook(HookVariableNames.POST_MLP, log_post_mlp),
     Hook(HookVariableNames.POST_FINAL_LAYER_NORM, log_post_final_layer_norm),
@@ -105,6 +119,7 @@ hidden_states = torch.cat([
 ])[:, :, 1:]
 hidden_states_freqs, hidden_states_mps = compute_power_spectrum(hidden_states)
 mlp_residuals_freqs, mlp_residuals_mps = compute_power_spectrum(pctx.context['mlp-residual'][:, :, 1:])
+attn_residuals_freqs, attn_residuals_mps = compute_power_spectrum(pctx.context['attn-residual'][:, :, 1:])
 
 artifact_metadata = {
     'name': 'optspectrum-125m-hidden-states' + '-seq-len-' + str(context_length),
@@ -132,6 +147,19 @@ artifact_metadata = {
 columns = {'Frequency': mlp_residuals_freqs.numpy()}
 for i in range(mlp_residuals_mps.shape[0]):
     columns[f'Layer {i + 1}'] = mlp_residuals_mps[i].numpy()
+
+write_artifact(artifact_metadata, columns)
+
+artifact_metadata = {
+    'name': 'optspectrum-125m-attn-residuals' + '-seq-len-' + str(context_length),
+    'visualization': 'line',
+    'y_name': 'Power',
+    'description': 'Power spectrum along sequence dimension of attention residuals for OPT-125M model, averaged across batch and latent dimensions.',
+    'config': model.config.to_dict(),
+}
+columns = {'Frequency': attn_residuals_freqs.numpy()}
+for i in range(attn_residuals_mps.shape[0]):
+    columns[f'Layer {i + 1}'] = attn_residuals_mps[i].numpy()
 
 write_artifact(artifact_metadata, columns)
 
@@ -188,6 +216,7 @@ hidden_states = torch.cat([
 ])[:, :, 1:]
 hidden_states_freqs, hidden_states_mps = compute_power_spectrum(hidden_states)
 mlp_residuals_freqs, mlp_residuals_mps = compute_power_spectrum(pctx.context['mlp-residual'][:, :, 1:])
+attn_residuals_freqs, attn_residuals_mps = compute_power_spectrum(pctx.context['attn-residual'][:, :, 1:])
 
 artifact_metadata = {
     'name': 'optspectrum-untrained-125m-hidden-states' + '-seq-len-' + str(context_length),
@@ -215,5 +244,18 @@ artifact_metadata = {
 columns = {'Frequency': mlp_residuals_freqs.numpy()}
 for i in range(mlp_residuals_mps.shape[0]):
     columns[f'Layer {i + 1}'] = mlp_residuals_mps[i].numpy()
+
+write_artifact(artifact_metadata, columns)
+
+artifact_metadata = {
+    'name': 'optspectrum-untrained-125m-attn-residuals' + '-seq-len-' + str(context_length),
+    'visualization': 'line',
+    'y_name': 'Power',
+    'description': 'Power spectrum along sequence dimension of attention residuals for an untrained OPT-125M model, averaged across batch and latent dimensions.',
+    'config': model.config.to_dict(),
+}
+columns = {'Frequency': attn_residuals_freqs.numpy()}
+for i in range(attn_residuals_mps.shape[0]):
+    columns[f'Layer {i + 1}'] = attn_residuals_mps[i].numpy()
 
 write_artifact(artifact_metadata, columns)
