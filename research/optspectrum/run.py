@@ -15,7 +15,7 @@ from precompute import (
 model_name = 'facebook/opt-125m'
 model = HookedOPTForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).to('cuda')
 
-raw_datasets = load_dataset('c4', 'en', streaming=True)
+raw_datasets = load_dataset('c4', 'en', streaming=True, trust_remote_code=True)
 context_length = 2048
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
