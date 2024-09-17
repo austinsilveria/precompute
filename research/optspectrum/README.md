@@ -1,5 +1,17 @@
 ## A Power Spectrum Power Law in Transformer LM Latent Space
 
+### Reproduce Figures 2-7
+```
+# Generate and save data
+python3 precompute/research/optspectrum/run.py
+```
+```
+# Launch dashboard web server
+python3 precompute/src/precompute/dash/dashboard.py
+```
+
+---
+
 Sander Dieleman's [Diffusion is spectral autoregression blog post](https://sander.ai/2024/09/02/spectral-autoregression.html) observes that natural images have an approximate power law in their power spectrum--i.e. averaged over all spatial directions in the image (rotating a ray from the origin to the edge of the image 360 degrees around), pixel brightnesses are dominated by low frequencies (slow brightness change/coarse structure) with contributions from higher frequencies (fast brightness change/granular structure) dropping off exponentially according to a smooth power law.
 
 In the following image, we're looking at a log-log plot of the radially averaged power spectrum of the image (red line), the noise power spectrum (blue line), and the image + noise (green line).
@@ -13,7 +25,7 @@ In the following image, we're looking at a log-log plot of the radially averaged
 
 So, we see that the image has a power law, the noise has uniform magnitude across all frequencies, and adding noise drowns out frequencies with lower magnitude (since the frequency powers vary across orders of magnitude).
 
-This means that in reverse diffusion, low frequencies are added to the image first, corresponding to observed behavior of diffusion models predicting coarse structure first before gradually refining it.
+This means that in reverse diffusion, low frequencies are added to the image first, corresponding to the observed behavior of diffusion models predicting coarse structure first before gradually refining it.
 
 If this is the case for images, how can we apply this analysis to language?
 
