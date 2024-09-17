@@ -66,7 +66,7 @@ At initialization the position embeddings are flat, but after training the posit
 
 Ok, so maybe we can interpret this as the transformer learning to smooth out the sharpness of language's latent space structure by aggregating sequence context.
 
-Why is the model attracted to parameters that produce these smooth representations? If we see these spectral properties in images, slightly proccessed audio clips (see Sander's blog post), and transformer latent space outputs, is there something fundamental efficient information representations here? Do other sequence models such as the [Linear Recurrent Unit](https://arxiv.org/abs/2303.06349) or [Mamba](https://arxiv.org/abs/2312.00752) produce outputs with these properties as well?
+Why is the model attracted to parameters that produce these smooth representations? If we see these spectral properties in images, slightly proccessed audio clips (see Sander's blog post), and transformer latent space outputs, is there something fundamental about efficient information representations here? Do other sequence models such as the [Linear Recurrent Unit](https://arxiv.org/abs/2303.06349) or [Mamba](https://arxiv.org/abs/2312.00752) produce outputs with these properties as well?
 
 Or is there an artifact of the transformer architecture that biases training towards parameters that produce these representations?
 
