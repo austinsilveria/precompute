@@ -47,7 +47,7 @@ def update_graphs(n):
     figures = []
     markdowns = []
     for i, df in enumerate(dfs):
-        fig = px.line(df, x=df.columns[0], y='val', color='var', title=figure_names[i], log_x=True, log_y=True)
+        fig = px.line(df, x=df.columns[0], y='val', color='var', title=figure_names[i], log_x=True, log_y=True, render_mode='svg')
 
         # Truncate long labels for rendering only
         labels = {col: col[:20] for col in df['var'].unique()}
