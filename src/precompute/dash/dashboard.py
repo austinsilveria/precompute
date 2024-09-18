@@ -31,7 +31,7 @@ app.layout = html.Div([
     ], className='graph-grid'),
     dcc.Interval(
         id='interval-component',
-        interval=30*1000, # milliseconds
+        interval=3000*1000, # milliseconds
         n_intervals=0
     ),
 ])
@@ -47,7 +47,10 @@ def update_graphs(n):
     figures = []
     markdowns = []
     for i, df in enumerate(dfs):
-        fig = px.line(df, x=df.columns[0], y='val', color='var', title=figure_names[i], log_x=True, log_y=True, render_mode='svg')
+        log = True
+        if artifact_metadata[i]['visualization'] == 'linear-line':
+            log = False
+        fig = px.line(df, x=df.columns[0], y='val', color='var', title=figure_names[i], log_x=log, log_y=log, render_mode='svg')
 
         # Truncate long labels for rendering only
         labels = {col: col[:20] for col in df['var'].unique()}

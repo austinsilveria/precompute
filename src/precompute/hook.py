@@ -51,6 +51,9 @@ class HookVariableNames:
     # [b, n, v]
     LOGITS = "logits"
 
+    # [b, n]
+    UNREDUCED_LOSS = "unreduced-loss"
+
     ALL_VARIABLE_NAMES = [
         POST_TOK_EMBEDDINGS,
         POST_POS_EMBEDDINGS,
@@ -69,6 +72,7 @@ class HookVariableNames:
         POST_MLP,
         POST_FINAL_LAYER_NORM,
         LOGITS,
+        UNREDUCED_LOSS,
     ]
 
 class PrecomputeContext:

@@ -1,19 +1,38 @@
 import torch
 
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 from diffusers import DDPMScheduler
 
 from precompute import (
     Hook,
     HookVariableNames,
+    HookedGPTNeoXForCausalLM,
     HookedOPTForCausalLM,
     PrecomputeContext,
     write_artifact,
+    offload,
 )
 
-model_name = 'facebook/opt-125m'
-model = HookedOPTForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).to('cuda')
+MODEL_CLS = {
+    'gpt-neox': HookedGPTNeoXForCausalLM,
+    'opt': HookedOPTForCausalLM,
+}
+
+model_name = 'EleutherAI/pythia-1b-deduped'
+model_type = 'gpt-neox'
+config = AutoConfig.from_pretrained(model_name)
+if model_type == 'gpt-neox':
+    # AMD nans with torch.nn.functional.scaled_dot_product_attention
+    config._attn_implementation = 'eager'
+
+offload = False
+
+model = MODEL_CLS[model_type].from_pretrained(model_name, config=config, torch_dtype=torch.float16)
+if offload:
+    model = offload(model)
+else:
+    model.to('cuda')
 
 raw_datasets = load_dataset('c4', 'en', streaming=True, trust_remote_code=True)
 context_length = 2048
@@ -112,17 +131,25 @@ def compute_power_spectrum(tensor):
     return frequencies, mean_power_spectrum
 
 # Skip first token
-hidden_states = torch.cat([
-    pctx.context['post-tok-embeddings'].unsqueeze(0),
-    pctx.context['post-pos-embeddings'].unsqueeze(0),
-    pctx.context['post-mlp'],
-])[:, :, 1:]
+if model_type == 'gpt-neox':
+    # pos embeddings are added during attention
+    hidden_states = torch.cat([
+        pctx.context['post-tok-embeddings'].unsqueeze(0),
+        pctx.context['post-mlp'],
+    ])[:, :, 1:]
+else:
+    hidden_states = torch.cat([
+        pctx.context['post-tok-embeddings'].unsqueeze(0),
+        pctx.context['post-pos-embeddings'].unsqueeze(0),
+        pctx.context['post-mlp'],
+    ])[:, :, 1:]
 hidden_states_freqs, hidden_states_mps = compute_power_spectrum(hidden_states)
 mlp_residuals_freqs, mlp_residuals_mps = compute_power_spectrum(pctx.context['mlp-residual'][:, :, 1:])
 attn_residuals_freqs, attn_residuals_mps = compute_power_spectrum(pctx.context['attn-residual'][:, :, 1:])
 
+artifact_model_name = model_name.replace('/', '-').replace('.', 'dot')
 artifact_metadata = {
-    'name': 'optspectrum-125m-hidden-states' + '-seq-len-' + str(context_length),
+    'name': f'optspectrum-{artifact_model_name}-hidden-states-seq-len-{str(context_length)}',
     'visualization': 'line',
     'y_name': 'Power',
     'description': 'Power spectrum along sequence dimension of hidden states for OPT-125M model, averaged across batch and latent dimensions.',
@@ -130,15 +157,18 @@ artifact_metadata = {
 }
 columns = {'Frequency': hidden_states_freqs.numpy()}
 columns['Tok Embeddings'] = hidden_states_mps[0].numpy()
-columns['Tok + Pos Embeddings'] = hidden_states_mps[1].numpy()
-for i in range(2, hidden_states_mps.shape[0]):
-    columns[f'Layer {i - 1}'] = hidden_states_mps[i].numpy()
+if model_type != 'gpt-neox':
+    columns['Tok + Pos Embeddings'] = hidden_states_mps[1].numpy()
+start = 1 if model_type == 'gpt-neox' else 2
+for i in range(start, hidden_states_mps.shape[0]):
+    name = f'Layer {i}' if model_type == 'gpt-neox' else f'Layer {i - 1}'
+    columns[name] = hidden_states_mps[i].numpy()
 
 write_artifact(artifact_metadata, columns)
 
 
 artifact_metadata = {
-    'name': 'optspectrum-125m-mlp-residuals' + '-seq-len-' + str(context_length),
+    'name': f'optspectrum-{artifact_model_name}-mlp-residuals-seq-len-{str(context_length)}',
     'visualization': 'line',
     'y_name': 'Power',
     'description': 'Power spectrum along sequence dimension of MLP residuals for OPT-125M model, averaged across batch and latent dimensions.',
@@ -151,7 +181,7 @@ for i in range(mlp_residuals_mps.shape[0]):
 write_artifact(artifact_metadata, columns)
 
 artifact_metadata = {
-    'name': 'optspectrum-125m-attn-residuals' + '-seq-len-' + str(context_length),
+    'name': f'optspectrum-{artifact_model_name}-attn-residuals-seq-len-{str(context_length)}',
     'visualization': 'line',
     'y_name': 'Power',
     'description': 'Power spectrum along sequence dimension of attention residuals for OPT-125M model, averaged across batch and latent dimensions.',
@@ -185,7 +215,7 @@ added_noise_hidden_states_freqs, added_noise_hidden_states_mps = compute_power_s
 noise_hidden_states_freqs, noise_hidden_states_mps = compute_power_spectrum(noise.unsqueeze(0))
 
 artifact_metadata = {
-    'name': 'optspectrum-125m-final-states-noise-comparison' + '-seq-len-' + str(context_length),
+    'name': f'optspectrum-{artifact_model_name}-final-states-noise-comparison-seq-len-{str(context_length)}',
     'visualization': 'line',
     'y_name': 'Power',
     'description': 'Power spectrum along sequence dimension of final hidden states for an untrained OPT-125M model, averaged across batch and latent dimensions. Compared against quarter/half noise from DDPM scheduler, directly added noise, and pure noise.',
@@ -202,24 +232,37 @@ write_artifact(artifact_metadata, columns)
 # Untrained
 config = model.config
 config.torch_dtype = torch.float16
-model = HookedOPTForCausalLM(config=config).to('cuda')
+model = MODEL_CLS[model_type](config=config)
+if offload:
+    model = offload(model)
+else:
+    model.to('cuda')
 pctx = PrecomputeContext(model.config, hooks=hooks)
+
+torch.cuda.empty_cache()
 
 with torch.no_grad():
     output = model(inputs, pctx=pctx)
 
 # Skip first token
-hidden_states = torch.cat([
-    pctx.context['post-tok-embeddings'].unsqueeze(0),
-    pctx.context['post-pos-embeddings'].unsqueeze(0),
-    pctx.context['post-mlp'],
-])[:, :, 1:]
+if model_type == 'gpt-neox':
+    # pos embeddings are added during attention
+    hidden_states = torch.cat([
+        pctx.context['post-tok-embeddings'].unsqueeze(0),
+        pctx.context['post-mlp'],
+    ])[:, :, 1:]
+else:
+    hidden_states = torch.cat([
+        pctx.context['post-tok-embeddings'].unsqueeze(0),
+        pctx.context['post-pos-embeddings'].unsqueeze(0),
+        pctx.context['post-mlp'],
+    ])[:, :, 1:]
 hidden_states_freqs, hidden_states_mps = compute_power_spectrum(hidden_states)
 mlp_residuals_freqs, mlp_residuals_mps = compute_power_spectrum(pctx.context['mlp-residual'][:, :, 1:])
 attn_residuals_freqs, attn_residuals_mps = compute_power_spectrum(pctx.context['attn-residual'][:, :, 1:])
 
 artifact_metadata = {
-    'name': 'optspectrum-untrained-125m-hidden-states' + '-seq-len-' + str(context_length),
+    'name': f'optspectrum-untrained-{artifact_model_name}-hidden-states-seq-len-{str(context_length)}',
     'visualization': 'line',
     'y_name': 'Power',
     'description': 'Power spectrum along sequence dimension of hidden states for an untrained OPT-125M model, averaged across batch and latent dimensions.',
@@ -227,15 +270,18 @@ artifact_metadata = {
 }
 columns = {'Frequency': hidden_states_freqs.numpy()}
 columns['Tok Embeddings'] = hidden_states_mps[0].numpy()
-columns['Tok + Pos Embeddings'] = hidden_states_mps[1].numpy()
-for i in range(2, hidden_states_mps.shape[0]):
-    columns[f'Layer {i - 1}'] = hidden_states_mps[i].numpy()
+if model_type != 'gpt-neox':
+    columns['Tok + Pos Embeddings'] = hidden_states_mps[1].numpy()
+start = 1 if model_type == 'gpt-neox' else 2
+for i in range(start, hidden_states_mps.shape[0]):
+    name = f'Layer {i}' if model_type == 'gpt-neox' else f'Layer {i - 1}'
+    columns[name] = hidden_states_mps[i].numpy()
 
 write_artifact(artifact_metadata, columns)
 
 
 artifact_metadata = {
-    'name': 'optspectrum-untrained-125m-mlp-residuals' + '-seq-len-' + str(context_length),
+    'name': f'optspectrum-untrained-{artifact_model_name}-mlp-residuals-seq-len-{str(context_length)}',
     'visualization': 'line',
     'y_name': 'Power',
     'description': 'Power spectrum along sequence dimension of MLP residuals for an untrained OPT-125M model, averaged across batch and latent dimensions.',
@@ -248,7 +294,7 @@ for i in range(mlp_residuals_mps.shape[0]):
 write_artifact(artifact_metadata, columns)
 
 artifact_metadata = {
-    'name': 'optspectrum-untrained-125m-attn-residuals' + '-seq-len-' + str(context_length),
+    'name': f'optspectrum-untrained-{artifact_model_name}-attn-residuals-seq-len-{str(context_length)}',
     'visualization': 'line',
     'y_name': 'Power',
     'description': 'Power spectrum along sequence dimension of attention residuals for an untrained OPT-125M model, averaged across batch and latent dimensions.',
