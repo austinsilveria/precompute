@@ -24,7 +24,7 @@ def write_artifact(metadata, columns) -> None:
 # List all artifacts in the artifact cache, sorted by time
 def list_artifacts() -> list:
     artifacts = [ArtifactConstants.ARTIFACT_CACHE_PATH + f for f in os.listdir(ArtifactConstants.ARTIFACT_CACHE_PATH) if f.endswith('-metadata.json')]
-    return sorted(artifacts, key=os.path.getmtime)
+    return sorted(artifacts, key=os.path.getmtime, reverse=True)
 
 def read_artifact_metadata(file_path) -> dict:
     with open(file_path, 'r') as file:
