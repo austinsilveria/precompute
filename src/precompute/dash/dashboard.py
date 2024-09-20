@@ -1,5 +1,6 @@
 from dash import Dash, html, dcc, callback, Input, Output
 import plotly.express as px
+import pandas as pd
 
 from precompute import list_artifacts, read_artifact_metadata, read_artifact_data
 
@@ -18,16 +19,25 @@ app = Dash(__name__)
 #   - support visualization types
 
 artifact_metadata = [read_artifact_metadata(f) for f in list_artifacts()]
-figure_names = [md['name'] for md in artifact_metadata]
+
+groups = list(set([md['artifact_group'] for md in artifact_metadata if 'artifact_group' in md]))
+figure_names = groups + [md['name'] for md in artifact_metadata if 'artifact_group' not in md]
+
+artifacts_by_figure = { fig_name: [] for fig_name in figure_names }
+for md in artifact_metadata:
+    if 'artifact_group' in md:
+        artifacts_by_figure[md['artifact_group']].append(md)
+    else:
+        artifacts_by_figure[md['name']].append(md)
 
 app.layout = html.Div([
     html.H1(children='Precompute Dashboard', className='h1'),
     dcc.Input(id='dummy-input', style={'display': 'none'}),
     html.Div([
         html.Div([
-            dcc.Graph(id=f'graph-{md["name"]}', className='graph'),
-            dcc.Markdown(id=f'markdown-{md["name"]}', className='markdown')
-        ], className='graph-container') for md in artifact_metadata
+            dcc.Graph(id=f'graph-{name}', className='graph'),
+            dcc.Markdown(id=f'markdown-{name}', className='markdown')
+        ], className='graph-container') for name in figure_names
     ], className='graph-grid'),
     dcc.Interval(
         id='interval-component',
@@ -41,14 +51,27 @@ app.layout = html.Div([
     Input('interval-component', 'n_intervals'),
 )
 def update_graphs(n):
-    dfs = [read_artifact_data(md['data_path']).to_pandas() for md in artifact_metadata]
+    dfs = []
+    for artifacts in artifacts_by_figure.values():
+        window = artifacts[0]['window-average'] if 'window-average' in artifacts[0] else 1
+        artifact_data = [read_artifact_data(md['data_path']).to_pandas() for md in artifacts]
+        combined = {
+            artifact_data[0].columns[0]: artifact_data[0][artifact_data[0].columns[0]]
+        }
+        for i, ad in enumerate(artifact_data):
+            for col in ad.columns[1:]:
+                combined[f'{artifacts[i]["name"]}-{col}'] = ad[col].rolling(window=window).mean()
+        dfs.append(pd.DataFrame(combined))
     dfs = [df.melt(id_vars=[df.columns[0]], var_name='var', value_name='val') for df in dfs]
 
     figures = []
     markdowns = []
-    for i, df in enumerate(dfs):
+    for i, artifact_md_list in enumerate(artifacts_by_figure.values()):
+        df = dfs[i]
+        md = artifact_md_list[0]
+
         log = True
-        if artifact_metadata[i]['visualization'] == 'linear-line':
+        if md['visualization'] == 'linear-line':
             log = False
         fig = px.line(df, x=df.columns[0], y='val', color='var', title=figure_names[i], log_x=log, log_y=log, render_mode='svg')
 
@@ -68,7 +91,7 @@ def update_graphs(n):
             legend_title_text='',
         )
         fig.add_annotation(
-            text=artifact_metadata[i]['y_name'],
+            text=md['y_name'],
             xref="paper", yref="paper",
             x=-0.075, y=0.5,
             xanchor="right",
@@ -78,7 +101,7 @@ def update_graphs(n):
         )
         figures.append(fig)
 
-        markdown_text = artifact_metadata[i]['description'] if 'description' in artifact_metadata[i] else ''
+        markdown_text = md['description'] if 'description' in md else ''
         markdowns.append(markdown_text)
     
     return figures + markdowns
