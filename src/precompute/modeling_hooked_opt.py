@@ -195,6 +195,13 @@ class OPTAttention(nn.Module):
                 f" {attn_weights.size()}"
             )
 
+        attn_weights = pctx.hook_tensor(
+            HookVariableNames.PRE_MASK_ATTN_WEIGHTS,
+            attn_weights,
+            shape_in=lambda x: rearrange(x, '(b h) i j -> b h i j', b=bsz, h=self.num_heads),
+            shape_out=lambda x: rearrange(x, 'b h i j -> (b h) i j'),
+        )
+
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, tgt_len, src_len):
                 raise ValueError(
@@ -205,6 +212,13 @@ class OPTAttention(nn.Module):
                 attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device)
             )
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+        attn_weights = pctx.hook_tensor(
+            HookVariableNames.POST_MASK_ATTN_WEIGHTS,
+            attn_weights,
+            shape_in=lambda x: rearrange(x, '(b h) i j -> b h i j', b=bsz, h=self.num_heads),
+            shape_out=lambda x: rearrange(x, 'b h i j -> (b h) i j'),
+        )
 
         # upcast to fp32 if the weights are in fp16. Please see https://github.com/huggingface/transformers/pull/17437
         if attn_weights.dtype == torch.float16:

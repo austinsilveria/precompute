@@ -26,6 +26,10 @@ class HookVariableNames:
     # [b, h, n, c]
     VALUE_STATES = "value-states"
     # [b, h, n, n]
+    PRE_MASK_ATTN_WEIGHTS = "pre-mask-attn-weights"
+    # [b, h, n, n]
+    POST_MASK_ATTN_WEIGHTS = "post-mask-attn-weights"
+    # [b, h, n, n]
     ATTN_PROBS = "attn-probs"
     # [b, h, n, c]
     ATTN_WEIGHTED_VALUES = "attn-weighted-values"
@@ -61,6 +65,8 @@ class HookVariableNames:
         QUERY_STATES,
         KEY_STATES,
         VALUE_STATES,
+        PRE_MASK_ATTN_WEIGHTS,
+        POST_MASK_ATTN_WEIGHTS,
         ATTN_PROBS,
         ATTN_WEIGHTED_VALUES,
         ATTN_RESIDUAL,

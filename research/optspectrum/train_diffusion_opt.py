@@ -68,8 +68,8 @@ class CustomTrainer(Trainer):
 
         lm_loss = student_output.loss
         diffusion_loss = F.mse_loss(self.pctx.context['diffusion_out'], noise)
-        # loss = lm_loss + diffusion_loss * 10
-        loss = lm_loss
+        loss = lm_loss + diffusion_loss * 10
+        # loss = lm_loss
 
         if 'Loss' not in self.pctx.training_log:
             self.pctx.training_log['Loss'] = {
@@ -86,7 +86,7 @@ class CustomTrainer(Trainer):
         return (loss, student_output) if return_outputs else loss
     
 def get_save_dir_name(config):
-    return f'optspectrum-no-diffusion-patch-125m-{config.ddpm_num_steps}-{config.ddpm_beta_schedule}-{config.ddpm_beta_end}-{config.lr}-{config.max_steps}-{config.noise_pct}'
+    return f'optspectrum-bidir-diffusion-10x-patch-125m-{config.ddpm_num_steps}-{config.ddpm_beta_schedule}-{config.ddpm_beta_end}-{config.lr}-{config.max_steps}-{config.noise_pct}'
 
 def main():
     model_name = "facebook/opt-125m"
@@ -149,6 +149,19 @@ def main():
         print(f'layer: {ctx.context["layer"]}')
         return x
 
+    # HookVariableNames.PRE_MASK_ATTN_WEIGHTS
+    def steal_pre_mask_attn_weights(x, ctx):
+        ctx.context['pre_mask_attn_weights'] = x
+        return x
+
+    # HookVariableNames.POST_MASK_ATTN_WEIGHTS
+    def patch_post_mask_attn_weights(x, ctx):
+        if ctx.context['layer'] != 0 and ctx.context['layer'] <= config.num_hidden_layers - 4:
+            # print(f'Layer {ctx.context["layer"]} bidirectional attention.')
+            return ctx.context['pre_mask_attn_weights']
+        # print(f'Layer {ctx.context["layer"]} causal attention.')
+        return x
+
     # HookVariableNames.POST_MLP
     def patch_diffusion_model(x, ctx):
         if ctx.context['layer'] == 0:
@@ -165,13 +178,16 @@ def main():
                 step_out = ctx.noise_scheduler.step(x[i], t, ctx.context['noisy_hidden_states'][i], return_dict=True)
                 orig[i] = step_out.pred_original_sample
             # add in post layer 1 with three layers left
-            # return orig + ctx.context['post_layer_1']
-            return ctx.context['post_layer_1']
+            # print(f'Post Layer {ctx.context["layer"]} switching to causal.')
+            return orig + ctx.context['post_layer_1']
+            # return ctx.context['post_layer_1']
         return x
 
     hooks = [
         # Hook(HookVariableNames.POST_POS_EMBEDDINGS, add_noisy_hidden_states),
         # Hook(HookVariableNames.PRE_MLP, print_layer),
+        Hook(HookVariableNames.PRE_MASK_ATTN_WEIGHTS, steal_pre_mask_attn_weights),
+        Hook(HookVariableNames.POST_MASK_ATTN_WEIGHTS, patch_post_mask_attn_weights),
         Hook(HookVariableNames.POST_MLP, patch_diffusion_model),
     ]
     pctx = PrecomputeContext(config, hooks=hooks)
