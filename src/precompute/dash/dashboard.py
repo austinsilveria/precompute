@@ -31,7 +31,7 @@ app.layout = html.Div([
     ], className='graph-grid'),
     dcc.Interval(
         id='interval-component',
-        interval=3000*1000, # milliseconds
+        interval=30*1000, # milliseconds
         n_intervals=0
     ),
 ])

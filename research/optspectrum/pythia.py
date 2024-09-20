@@ -32,7 +32,7 @@ def get_pythia_steps():
     return out
 pythia_steps = get_pythia_steps()
 
-model_name = 'EleutherAI/pythia-70m-deduped'
+model_name = 'EleutherAI/pythia-160m-deduped'
 model_type = 'gpt-neox'
 config = AutoConfig.from_pretrained(model_name)
 if model_type == 'gpt-neox':
@@ -63,7 +63,7 @@ tokenized_datasets = raw_datasets.map(
     tokenize, batched=True, remove_columns=raw_datasets["train"].column_names
 )
 
-inputs = torch.stack([torch.tensor(i['input_ids']) for i in tokenized_datasets["validation"].take(16)]).to('cuda')
+inputs = torch.stack([torch.tensor(i['input_ids']) for i in tokenized_datasets["validation"].take(8)]).to('cuda')
 
 # [b, n, d]
 def log_post_tok_embeddings(x, ctx):
@@ -75,7 +75,7 @@ def log_post_pos_embeddings(x, ctx):
     ctx.context['post-pos-embeddings'] = x.cpu()
     return x
 
-attn_residuals_filter_patch = 'low-pass'
+attn_residuals_filter_patch = None
 cutoffs = [1, 0.1, 0.05, 0.01, 0.005, 0.0025, 0.001, 0.0005, 0]
 def log_attn_residual(x, ctx):
     if 'attn-residual' not in ctx.context:
@@ -97,15 +97,16 @@ def log_attn_residual(x, ctx):
             lower_cutoff = cutoffs[-1 * (ctx.context['cutoff'] + 1)]
             mask = torch.where(torch.abs(freqs) <= cutoff_freq, 1, 0).to('cuda').unsqueeze(0).unsqueeze(-1)
 
-            # mid pass
-            # mask = mask * torch.where(torch.abs(freqs) >= lower_cutoff, 1, 0).to('cuda').unsqueeze(0).unsqueeze(-1)
+            if attn_residuals_filter_patch == 'mid-pass':
+                # mid pass
+                mask = mask * torch.where(torch.abs(freqs) >= lower_cutoff, 1, 0).to('cuda').unsqueeze(0).unsqueeze(-1)
+            elif attn_residuals_filter_patch == 'out-pass':
+                # out pass
+                mask = torch.clamp(mask + torch.where(torch.abs(freqs) >= lower_cutoff, 1, 0).to('cuda').unsqueeze(0).unsqueeze(-1), 0, 1)
 
-            # out pass
-            mask = torch.clamp(mask + torch.where(torch.abs(freqs) >= lower_cutoff, 1, 0).to('cuda').unsqueeze(0).unsqueeze(-1), 0, 1)
         print(f'mask: {mask.shape}')
 
         filtered_fft = fft * mask
-        # filtered_fft = fft
 
         # inverse fft
         filtered = torch.fft.ifft(filtered_fft, dim=1).real

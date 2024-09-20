@@ -30,7 +30,7 @@ def get_pythia_steps():
     return out
 pythia_steps = get_pythia_steps()
 
-model_name = 'facebook/opt-1.3b'
+model_name = 'facebook/opt-125m'
 model_type = 'opt'
 config = AutoConfig.from_pretrained(model_name)
 if model_type == 'gpt-neox':
@@ -122,7 +122,7 @@ def patch_pre_mlp(x, ctx):
     noise = torch.randn_like(filtered)
     print(f'noise norm: {torch.norm(noise, dim=-1).mean()}')
 
-    return noise.half()
+    # return noise.half()
     return filtered.half()
 
 # HookVariableNames.POST_ACT
@@ -238,7 +238,9 @@ else:
 for j in range(len(cutoffs)):
     pctx.context['cutoff'] = j
     with torch.no_grad():
-        output = model(inputs, pctx=pctx)
+        output = model(inputs, labels=inputs, pctx=pctx)
+
+    print(f'cutoff {cutoffs[j]} loss: {output.loss.item()}')
 
     tok_500_activated_neurons[j] = pctx.context['tok_500_activated_neurons']
     mean_activated_neurons[j] = pctx.context['mean_activated_neurons']
