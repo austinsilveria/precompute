@@ -67,8 +67,9 @@ class CustomTrainer(Trainer):
         student_output = model(input_ids, labels=input_ids, pctx=self.pctx)
 
         lm_loss = student_output.loss
-        diffusion_loss = F.mse_loss(self.pctx.context['diffusion_out'], noise)
-        loss = lm_loss + diffusion_loss * 10
+        # diffusion_loss = F.mse_loss(self.pctx.context['diffusion_out'], noise) * 10
+        diffusion_loss = F.mse_loss(self.pctx.context['diffusion_x0'], hidden_states)
+        loss = lm_loss + diffusion_loss
         # loss = lm_loss
 
         if 'Loss' not in self.pctx.training_log:
@@ -86,7 +87,7 @@ class CustomTrainer(Trainer):
         return (loss, student_output) if return_outputs else loss
     
 def get_save_dir_name(config):
-    return f'optspectrum-bidir-diffusion-10x-patch-125m-{config.ddpm_num_steps}-{config.ddpm_beta_schedule}-{config.ddpm_beta_end}-{config.lr}-{config.max_steps}-{config.noise_pct}'
+    return f'optspectrum-diffusion-10x-patch-125m-x0-target-{config.x0_target}-clip-{config.clip_sample}-{config.ddpm_num_steps}-{config.ddpm_beta_schedule}-{config.ddpm_beta_end}-{config.lr}-{config.max_steps}-{config.noise_pct}'
 
 def main():
     model_name = "facebook/opt-125m"
@@ -123,11 +124,13 @@ def main():
 
     config = AutoConfig.from_pretrained(model_name)
     config.lr = 1e-4
-    config.max_steps = 150000
+    config.max_steps = 10000
     config.ddpm_num_steps = 1000
     config.ddpm_beta_schedule = 'linear'
     config.ddpm_beta_end = 0.02
     config.noise_pct = 0.2
+    config.clip_sample = False
+    config.x0_target = True
 
     SAVE_DIR = get_save_dir_name(config)
     CHECKPOINT = None
@@ -177,6 +180,7 @@ def main():
                 t = ctx.context['diffusion_step'][i]
                 step_out = ctx.noise_scheduler.step(x[i], t, ctx.context['noisy_hidden_states'][i], return_dict=True)
                 orig[i] = step_out.pred_original_sample
+            pctx.context['diffusion_x0'] = orig
             # add in post layer 1 with three layers left
             # print(f'Post Layer {ctx.context["layer"]} switching to causal.')
             return orig + ctx.context['post_layer_1']
@@ -186,8 +190,8 @@ def main():
     hooks = [
         # Hook(HookVariableNames.POST_POS_EMBEDDINGS, add_noisy_hidden_states),
         # Hook(HookVariableNames.PRE_MLP, print_layer),
-        Hook(HookVariableNames.PRE_MASK_ATTN_WEIGHTS, steal_pre_mask_attn_weights),
-        Hook(HookVariableNames.POST_MASK_ATTN_WEIGHTS, patch_post_mask_attn_weights),
+        # Hook(HookVariableNames.PRE_MASK_ATTN_WEIGHTS, steal_pre_mask_attn_weights),
+        # Hook(HookVariableNames.POST_MASK_ATTN_WEIGHTS, patch_post_mask_attn_weights),
         Hook(HookVariableNames.POST_MLP, patch_diffusion_model),
     ]
     pctx = PrecomputeContext(config, hooks=hooks)
@@ -241,6 +245,7 @@ def main():
 
                     artifact_metadata = {
                         'name': name,
+                        'artifact_group': f'optspectrum-diffusion-{key}',
                         'visualization': 'linear-line',
                         'window-average': 10,
                         'y_name': key,
@@ -265,7 +270,7 @@ def main():
     )
 
 
-    noise_scheduler = DDPMScheduler(num_train_timesteps=config.ddpm_num_steps, beta_schedule=config.ddpm_beta_schedule, beta_end=config.ddpm_beta_end, clip_sample=True)
+    noise_scheduler = DDPMScheduler(num_train_timesteps=config.ddpm_num_steps, beta_schedule=config.ddpm_beta_schedule, beta_end=config.ddpm_beta_end, clip_sample=config.clip_sample)
     pctx.noise_scheduler = noise_scheduler
     trainer.noise_scheduler = noise_scheduler
     trainer.scaling_factor = None
