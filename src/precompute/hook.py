@@ -1,3 +1,4 @@
+import os
 from collections.abc import Callable
 from typing import Any, List
 
@@ -96,6 +97,22 @@ class PrecomputeContext:
         # self.hook_variables = {}
         for hook in hooks:
             self.hooks[hook.hook_variable_name].append(hook.hook_fn)
+
+        self.cache_dir = './cache'
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+        
+        self.hook_hashes = []
+        self.cache_metadata = {
+            'hook-hashes': [],
+            'checkpoint-hashes': [],
+        }
+        self.new_cache_metadata = {
+            'hook-hashes': [],
+            'checkpoint-hashes': [],
+        }
+        self.hooks_cached = True
+        self.vis_num = 0
 
     def hook_tensor(self, variable_name: str, value: torch.Tensor, shape_in=lambda x: x, shape_out=lambda x: x) -> None:
         # Call matched hooks

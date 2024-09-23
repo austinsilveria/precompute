@@ -4,6 +4,7 @@ import json
 from functools import wraps
 import os
 import types
+import uuid
 
 import torch
 from safetensors import safe_open
@@ -16,16 +17,19 @@ from precompute import PrecomputeContext, HOOKED_MODELS
 
 pctx = PrecomputeContext()
 
-def key(f):
-    pctx.key = f()
+def key(k):
+    pctx.key = json.dumps(k)
 
     # Load cache metadata for key if it exists
     # { 
     #   'hook-hashes': [ 'hash1', 'hash2', ... ], 
     #   'checkpoint-hashes': [ 'hash1', 'hash2', ... ], 
     # }
-    cache_metadata: dict
-    pctx.cache_metadata = cache_metadata
+    path = f'{pctx.cache_dir}/{hash(pctx.key)}-cache-metadata.json'
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            cache_metadata = json.load(f)
+        pctx.cache_metadata = cache_metadata
 
     return f
 
@@ -33,36 +37,37 @@ def hook(hook_variable):
     def decorator(f):
         pctx.hooks[hook_variable].append(f)
 
-        ser = f'{hook_variable}-{inspect.getsource(f).encode()}'
-        pctx.hook_hashes.append(hashlib.sha256(ser).hexdigest())
-
-        if ser not in pctx.cache_metadata['hook-hashes']:
+        hook_hash = hash(f'{hook_variable}-{inspect.getsource(f)}')
+        pctx.new_cache_metadata['hook-hashes'].append(hook_hash)
+        if hook_hash not in pctx.cache_metadata['hook-hashes']:
             pctx.hooks_cached = False
 
-        # @wraps(f)
-        # def wrapper(*args, **kwargs):
-        #     return f(*args, **kwargs)
-        # return wrapper
-        return f
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            return f(*args, **kwargs)
+        return wrapper
     return decorator
 
 # Hash the function
 # If hooks match and function hash is in cache, return the cached pctx
-def checkpoint(cache='./cache'):
-    def decorator(f):
-        # later checkpoints need to be a function of earlier checkpoints
-        hash = hashlib.sha256(inspect.getsource(f).encode()).hexdigest()
+def checkpoint(f):
+    # later checkpoints need to be a function of earlier checkpoints
+    last_hash = pctx.new_cache_metadata['checkpoint-hashes'][-1] if len(pctx.new_cache_metadata['checkpoint-hashes']) > 0 else ''
+    func_hash = hash(f'{last_hash}-{inspect.getsource(f)}')
+    pctx.new_cache_metadata['checkpoint-hashes'].append(func_hash)
 
-        @wraps(f)
-        def wrapper(*args, **kwargs):
-            if pctx.hooks_cached and hash in pctx.cache_metadata['checkpoint-hashes']:
-                pctx.cache = read_cache(hash)
-                return pctx
-            pctx = f(*args, **kwargs)
-            write_cache(hash, pctx)
+    with open(f'{pctx.cache_dir}/{pctx.key}-cache-metadata.json', 'w') as f:
+        json.dump(pctx.new_cache_metadata, f)
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if pctx.hooks_cached and func_hash in pctx.cache_metadata['checkpoint-hashes']:
+            pctx.cache = read_cache_data(func_hash, pctx)
             return pctx
-        return wrapper
-    return decorator
+        pctx = f(*args, **kwargs)
+        write_cache_data(func_hash, pctx)
+        return pctx
+    return wrapper
 
 # Executes function and stores the result
 def vis(f):
@@ -85,14 +90,17 @@ def vis(f):
         data['y_name'] = y
         
         table = pa.table(data['cols'])
-        path: str
+        path = f'{pctx.cache_dir}/{pctx.key}-vis-{pctx.vis_num}-data.arrow'
         pq.write_table(table, path)
 
         metadata = { k: v for k, v in data.items() if k != 'cols' }
+        metadata['key'] = json.loads(pctx.key)
 
-        metadata_path: str
+        metadata_path = f'{pctx.cache_dir}/{pctx.key}-vis-{pctx.vis_num}-metadata.json'
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f)
+
+        pctx.vis_num += 1
     return wrapper
 
 def model(model):
@@ -114,21 +122,23 @@ def model(model):
 
     return hooked_model, pctx
 
-def write_cache(hash, pctx):
+def write_cache_data(checkpt_hash, pctx):
     tensors = { k: v for k, v in pctx.cache.items() if isinstance(v, torch.Tensor) }
     other = { k: v for k, v in pctx.cache.items() if not isinstance(v, torch.Tensor) }
 
-    save_file(tensors, f'{pctx.key}-{hash}-tensors.safetensors')
+    save_file(tensors, f'{pctx.key}-{checkpt_hash}-tensors.safetensors')
 
-    with open(f'{hash}-other.json', 'w') as f:
+    with open(f'{pctx.key}-{checkpt_hash}-non-tensors.json', 'w') as f:
         json.dump(other, f)
 
-def read_cache(hash, pctx):
-    tensors = safe_open(f'{pctx.key}-{hash}-tensors.safetensors')
-    with open(f'{hash}-other.json', 'r') as f:
+def read_cache_data(checkpt_hash, pctx):
+    tensors = safe_open(f'{pctx.key}-{checkpt_hash}-tensors.safetensors')
+    with open(f'{checkpt_hash}-other.json', 'r') as f:
         other = json.load(f)
 
     pctx = { **tensors, **other }
 
     return pctx
     
+def hash(s):
+    return hashlib.sha256(s.encode()).hexdigest()

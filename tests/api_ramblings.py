@@ -29,7 +29,7 @@ pre.key({
 def log_post_mlp(x, pctx):
     pass
 
-@pre.checkpoint(cache='./cache')
+@pre.checkpoint
 def run(model, pctx):
     # Call model as usual, pctx is passed under the hood
     out = model(x)
@@ -38,7 +38,7 @@ def run(model, pctx):
 
     return pctx
 
-@pre.checkpoint(cache='./cache')
+@pre.checkpoint
 def second_run(model, pctx):
     out2 = model(x)
 
